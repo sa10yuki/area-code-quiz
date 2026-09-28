@@ -29,6 +29,18 @@
     </main>
 
     <aside class="panel" id="panel">
+      <!-- browse mode -->
+      <div class="browse" id="browse">
+        <div class="browse-head">
+          <input class="search" id="search" type="search" placeholder="局番・地名で検索（例: 045、札幌）" aria-label="局番・地名で検索" autocomplete="off">
+          <button class="btn ghost small" id="browseExitBtn">メニュー</button>
+        </div>
+        <div class="browse-detail" id="browseDetail">
+          <p class="browse-empty">地図のエリアか、下の一覧から選んでね</p>
+        </div>
+        <ul class="code-list" id="codeList"></ul>
+      </div>
+
       <div class="qcard">
         <p class="qlabel"><span class="mode-badge" id="modeBadge" hidden></span>この市外局番のエリアはどこ？</p>
         <p class="qcode" id="qcode">---</p>
@@ -70,12 +82,8 @@
           <ul class="weak-list" id="weakList"></ul>
           <button class="link-btn" id="resetBtn" type="button">成績をリセット</button>
         </div>
-        <label class="toggle">
-          <input type="checkbox" id="labelToggle" checked>
-          <span class="toggle-ui" aria-hidden="true"></span>
-          <span>地図に地名を表示する<small>オフにするとハードモード</small></span>
-        </label>
         <button class="btn primary big" id="startBtn">スタート</button>
+        <button class="btn ghost big browse-btn" id="browseBtn">市外局番を見る（閲覧モード）</button>
         <p class="best" id="bestText"></p>
       </div>
     </section>

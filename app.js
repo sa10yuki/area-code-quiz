@@ -3,7 +3,9 @@
 
   const QUESTIONS_PER_SET = 10;
   const JAPAN_BOUNDS = [[30.8, 129.3], [45.5, 145.9]];
-  const PALETTE = ['#f59f00', '#12b886', '#4c6ef5', '#e64980', '#7950f2', '#15aabf', '#82c91e'];
+  // No blues: the sea is bluish, so area fills stay in warm / green / purple hues.
+  const PALETTE_LIGHT = ['#f6cf7d', '#9fd9b9', '#f3b2c7', '#cdb8f0', '#cde596', '#f4bb97'];
+  const PALETTE_DARK = ['#80652e', '#2e6e52', '#81455b', '#5a4a86', '#5a722b', '#7f5236'];
   const STORE_KEY = 'areaCodeQuiz.v1';
 
   const $ = (id) => document.getElementById(id);
@@ -22,9 +24,8 @@
 
   // ---------- area data ----------
   const META = window.AREA_META;
-  const objName = Object.keys(window.AREA_TOPO.objects)[0];
-  const topoGeoms = window.AREA_TOPO.objects[objName].geometries;
-  const features = topojson.feature(window.AREA_TOPO, window.AREA_TOPO.objects[objName]).features;
+  const topoGeoms = window.AREA_TOPO.objects.areas.geometries;
+  const features = topojson.feature(window.AREA_TOPO, window.AREA_TOPO.objects.areas).features;
   const CODES = features.map((f) => f.properties.ab);
 
   // ---------- weak-code tracking ----------
@@ -58,8 +59,13 @@
     const used = new Set(neighbors[i].map((j) => colorIdx[j]).filter((c) => c !== undefined));
     let c = 0;
     while (used.has(c)) c++;
-    colorIdx[i] = c % PALETTE.length;
+    colorIdx[i] = c % PALETTE_LIGHT.length;
   });
+
+  function fullPlaces(code) {
+    const m = META[code];
+    return m.cities.join('・') + (m.towns ? `${m.cities.length ? ' ほか' : ''}${m.towns}町村` : '');
+  }
 
   function describe(code) {
     const m = META[code];
@@ -85,28 +91,30 @@
     attributionControl: true,
   });
   map.fitBounds(JAPAN_BOUNDS);
-  // GSI tiles (no API key): 淡色地図 with place names, 白地図 without them for "hard mode".
-  const ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a> | 局番: <a href="https://www.soumu.go.jp/main_sosiki/joho_tsusin/top/tel_number/shigai_list.html">総務省</a> | 境界: 国土数値情報';
-  const gsi = (id) => `https://cyberjapandata.gsi.go.jp/xyz/${id}/{z}/{x}/{y}.png`;
-  const labeledLayer = L.tileLayer(gsi('pale'), { attribution: ATTR, maxNativeZoom: 18 });
-  const blankLayer = L.tileLayer(gsi('blank'), { attribution: ATTR, minNativeZoom: 5, maxNativeZoom: 14 });
-  let showLabels = true;
-  function setTiles() {
-    const [on, off] = showLabels ? [labeledLayer, blankLayer] : [blankLayer, labeledLayer];
-    map.removeLayer(off);
-    if (!map.hasLayer(on)) on.addTo(map);
+  // No basemap tiles (they all print place names): the sea is the map background,
+  // land is the area fills, and prefecture borders are drawn from our own data.
+  map.attributionControl.addAttribution('局番: <a href="https://www.soumu.go.jp/main_sosiki/joho_tsusin/top/tel_number/shigai_list.html">総務省</a> | 境界: 国土数値情報');
+  map.createPane('lines');
+  map.getPane('lines').style.zIndex = 450;
+  map.getPane('lines').style.pointerEvents = 'none';
+  const prefLines = L.geoJSON(topojson.feature(window.AREA_TOPO, window.AREA_TOPO.objects.preflines), {
+    pane: 'lines', interactive: false, style: () => prefLineStyle(),
+  }).addTo(map);
+  function prefLineStyle() {
+    return { color: cssVar('--pref-line'), weight: 1.2, dashArray: '4 3', opacity: 0.8 };
   }
 
   const areaLayers = new Map(); // code -> L.GeoJSON layer
   const labelPoints = new Map(); // code -> LatLng for the code badge
+  const mainPieces = new Map(); // code -> largest polygon piece (for label visibility)
 
   function baseStyle(code) {
     const i = CODES.indexOf(code);
     return {
-      color: dark.matches ? '#101216' : '#ffffff',
+      color: dark.matches ? '#16181c' : '#ffffff',
       weight: 1.2,
-      fillColor: PALETTE[colorIdx[i]],
-      fillOpacity: dark.matches ? 0.32 : 0.26,
+      fillColor: (dark.matches ? PALETTE_DARK : PALETTE_LIGHT)[colorIdx[i]],
+      fillOpacity: 1,
       opacity: 1,
     };
   }
@@ -127,9 +135,10 @@
       if (size > bestSize) { bestSize = size; best = poly; }
     });
     labelPoints.set(code, best.getCenter());
+    mainPieces.set(code, best);
   });
 
-  dark.addEventListener('change', restyleAll);
+  dark.addEventListener('change', () => { restyleAll(); prefLines.setStyle(prefLineStyle()); });
 
   // ---------- quiz state ----------
   const state = {
@@ -162,18 +171,19 @@
   function restyleAll() {
     const q = current();
     const last = state.results[state.index];
+    const selectable = state.phase === 'question' || state.phase === 'browse';
     areaLayers.forEach((layer, code) => {
       let s = baseStyle(code);
-      if (state.phase === 'question' && code === state.selected) {
-        s = { ...s, color: cssVar('--select'), weight: 3, fillColor: cssVar('--select'), fillOpacity: 0.45 };
+      if (selectable && code === state.selected) {
+        s = { ...s, color: cssVar('--select'), weight: 3, fillColor: cssVar('--select-fill') };
       } else if (state.phase === 'answered') {
-        if (code === q) s = { ...s, color: cssVar('--ok'), weight: 3, fillColor: cssVar('--ok'), fillOpacity: 0.55 };
-        else if (last && !last.ok && code === last.picked) s = { ...s, color: cssVar('--ng'), weight: 3, fillColor: cssVar('--ng'), fillOpacity: 0.5 };
-        else s = { ...s, fillOpacity: s.fillOpacity * 0.55 };
+        if (code === q) s = { ...s, color: cssVar('--ok'), weight: 3, fillColor: cssVar('--ok-fill') };
+        else if (last && !last.ok && code === last.picked) s = { ...s, color: cssVar('--ng'), weight: 3, fillColor: cssVar('--ng-fill') };
+        else s = { ...s, fillColor: cssVar('--land-dim') };
       }
       layer.setStyle(s);
     });
-    if (state.phase === 'question' && state.selected) areaLayers.get(state.selected).bringToFront();
+    if (selectable && state.selected) areaLayers.get(state.selected).bringToFront();
     if (state.phase === 'answered') {
       if (last && !last.ok && last.picked) areaLayers.get(last.picked).bringToFront();
       areaLayers.get(q).bringToFront();
@@ -184,13 +194,30 @@
     badges.forEach((b) => map.removeLayer(b));
     badges = [];
   }
-  function addBadge(code) {
-    const b = L.tooltip({ permanent: true, direction: 'center', className: 'area-label', interactive: false })
+  function addBadge(code, className = 'area-label big') {
+    const b = L.tooltip({ permanent: true, direction: 'center', className, interactive: false })
       .setLatLng(labelPoints.get(code))
       .setContent(code)
       .addTo(map);
+    b.code = code;
     badges.push(b);
+    return b;
   }
+
+  // Browse mode shows every code on the map; hide labels whose area is too small
+  // on screen at the current zoom so they don't pile up (e.g. around Tokyo).
+  function updateBrowseLabels() {
+    if (state.phase !== 'browse') return;
+    badges.forEach((b) => {
+      const bounds = mainPieces.get(b.code).getBounds();
+      const nw = map.latLngToContainerPoint(bounds.getNorthWest());
+      const se = map.latLngToContainerPoint(bounds.getSouthEast());
+      const fits = se.x - nw.x >= 34 && se.y - nw.y >= 22;
+      const el = b.getElement();
+      if (el) el.style.display = fits || b.code === state.selected ? '' : 'none';
+    });
+  }
+  map.on('zoomend', updateBrowseLabels);
 
   function renderProgress() {
     const dots = $('dots');
@@ -240,7 +267,9 @@
   }
 
   function onAreaClick(code) {
-    if (state.phase === 'question') {
+    if (state.phase === 'browse') {
+      selectBrowse(code, false);
+    } else if (state.phase === 'question') {
       state.selected = code;
       $('confirmBtn').disabled = false;
       $('hint').textContent = 'このエリアでOK？ ほかをタップで選び直せるよ';
@@ -258,6 +287,8 @@
     if (!matchMedia('(hover: hover)').matches) return;
     const layer = areaLayers.get(code);
     if (state.phase === 'question' && code !== state.selected) {
+      layer.setStyle(on ? { weight: 2.5, color: cssVar('--select') } : baseStyle(code));
+    } else if (state.phase === 'browse' && code !== state.selected) {
       layer.setStyle(on ? { weight: 2.5, color: cssVar('--select') } : baseStyle(code));
     } else if (state.phase === 'answered') {
       if (on) layer.bindTooltip(code, { sticky: true, className: 'area-tip' }).openTooltip();
@@ -371,16 +402,83 @@
   }
 
   // ---------- wiring ----------
-  const labelToggle = $('labelToggle');
-  if (typeof store.labels === 'boolean') labelToggle.checked = store.labels;
-  function applyLabels() {
-    showLabels = labelToggle.checked;
-    setTiles();
-    store.labels = showLabels;
-    saveStore(store);
+  // ---------- browse mode ----------
+  const SORTED_CODES = CODES.slice().sort();
+  const toHalfWidth = (s) => s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+
+  function matchesQuery(code, query) {
+    const q = toHalfWidth(query.trim());
+    if (!q) return true;
+    if (/^\d+$/.test(q)) return code.startsWith(q) || code.startsWith('0' + q);
+    const m = META[code];
+    return m.prefs.some((p) => p.includes(q) || q.includes(p))
+      || m.subs.some((s) => s.includes(q))
+      || m.cities.some((c) => c.includes(q));
   }
-  labelToggle.addEventListener('change', applyLabels);
-  applyLabels();
+
+  function renderCodeList() {
+    const query = $('search').value;
+    const hits = SORTED_CODES.filter((c) => matchesQuery(c, query));
+    $('codeList').innerHTML = hits.length
+      ? hits.map((c) => `<li><button type="button" data-code="${c}" class="${c === state.selected ? 'on' : ''}"><b>${c}</b><span>${describe(c).region}</span></button></li>`).join('')
+      : '<li class="no-hit">見つからなかった…</li>';
+    return hits;
+  }
+
+  function renderBrowseDetail(code) {
+    const d = describe(code);
+    const s = store.stats && store.stats[code];
+    const record = s ? `<p class="bd-stat">あなたの成績：${s.ok}勝 ${s.ng}敗${isWeak(code) ? '（苦手）' : ''}</p>` : '';
+    $('browseDetail').innerHTML = `
+      <div class="bd-head"><b class="bd-code">${code}</b><span class="bd-region">${d.region}</span></div>
+      <p class="bd-places">${fullPlaces(code)}</p>${record}`;
+  }
+
+  function selectBrowse(code, fly) {
+    state.selected = code;
+    restyleAll();
+    renderBrowseDetail(code);
+    renderCodeList();
+    updateBrowseLabels();
+    const btn = $('codeList').querySelector(`[data-code="${code}"]`);
+    if (btn) btn.scrollIntoView({ block: 'nearest' });
+    if (fly) map.flyToBounds(areaLayers.get(code).getBounds(), { padding: [30, 30], maxZoom: 8, duration: 0.6 });
+  }
+
+  function startBrowse() {
+    setPhase('browse');
+    state.queue = [];
+    state.results = [];
+    state.selected = null;
+    map.closePopup();
+    clearBadges();
+    CODES.forEach((c) => addBadge(c, 'area-label'));
+    $('startScreen').hidden = true;
+    $('resultScreen').hidden = true;
+    $('search').value = '';
+    $('browseDetail').innerHTML = '<p class="browse-empty">地図のエリアか、下の一覧から選んでね</p>';
+    renderCodeList();
+    restyleAll();
+    renderProgress();
+    $('progressText').textContent = '閲覧モード';
+    map.flyToBounds(JAPAN_BOUNDS, { duration: 0.6 });
+    // labels are measured after the fly animation settles
+    map.once('moveend', updateBrowseLabels);
+    updateBrowseLabels();
+  }
+
+  $('search').addEventListener('input', renderCodeList);
+  $('search').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const first = SORTED_CODES.find((c) => matchesQuery(c, $('search').value));
+    if (first) selectBrowse(first, true);
+  });
+  $('codeList').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-code]');
+    if (btn) selectBrowse(btn.dataset.code, true);
+  });
+  $('browseBtn').addEventListener('click', startBrowse);
+  $('browseExitBtn').addEventListener('click', () => showMenu());
 
   const modeRadios = [...document.querySelectorAll('input[name="mode"]')];
   const selectedMode = () => modeRadios.find((r) => r.checked).value;
@@ -409,6 +507,7 @@
     setPhase('idle');
     state.queue = [];
     state.results = [];
+    state.selected = null;
     clearBadges();
     map.closePopup();
     restyleAll();

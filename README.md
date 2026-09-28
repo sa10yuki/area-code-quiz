@@ -10,7 +10,7 @@
 3. 回答後はほかのエリアをタップすると、その局番とエリアが見られる
 4. 10問終わったら結果表示。間違えた局番だけ復習もできる
 
-「地図に地名を表示する」をオフにすると白地図のハードモードになる。
+地図に地名は出さない。背景タイルは使わず、海は背景色、陸はエリアの塗り、県境は点線（行政区域データから生成）で描いている。
 
 ### 苦手克服モード
 
@@ -18,6 +18,12 @@
 - 苦手克服モードでは、苦手な局番を正解率が低いものほど出やすくして出題。10問に足りない分はまだ出題されていない局番で埋める
 - 成績はブラウザ（localStorage）に保存。スタート画面の「成績をリセット」で消せる
 - 自己ベストはふつうモードの成績だけを記録
+
+### 閲覧モード
+
+- スタート画面の「市外局番を見る（閲覧モード）」から入る
+- 地図上に全エリアの局番を表示（ズームが足りなくて入りきらない小さいエリアは、拡大すると出てくる）
+- エリアをタップするか、一覧・検索（局番 / 都道府県 / 市名。例: `45`、`札幌`）から選ぶと、そのエリアの市町村と自分の成績が見られる
 
 ## エリアの作り方
 
@@ -45,7 +51,7 @@ curl -L https://raw.githubusercontent.com/smartnews-smri/japan-topography/main/d
 node pdf2txt.mjs          # PDF -> 位置付きテキスト
 node build-assign.mjs     # 番号区画を市区町村に割り当て
 node -e 'const a=require("./out/assign.json");require("fs").writeFileSync("out/assign.csv","N03_007,ab\n"+Object.entries(a).map(([k,v])=>k+","+v).join("\n"))'
-npx mapshaper -i raw/muni.topo.json -join out/assign.csv keys=N03_007,N03_007 string-fields=N03_007,ab -filter "ab != null" -dissolve ab -simplify 40% keep-shapes -o ../data/areas.topo.json format=topojson quantization=20000
+npx mapshaper -i raw/muni.topo.json name=muni -join out/assign.csv keys=N03_007,N03_007 string-fields=N03_007,ab -filter "ab != null" -dissolve ab + name=areas -dissolve N03_001 target=muni + name=prefs -innerlines target=prefs + name=preflines -simplify 40% keep-shapes target=* -o ../data/areas.topo.json format=topojson quantization=20000 target=areas,preflines
 node build-meta.mjs       # data/areas.js を出力
 ```
 
@@ -53,4 +59,3 @@ node build-meta.mjs       # data/areas.js を出力
 
 - 市外局番: [総務省「市外局番の一覧」](https://www.soumu.go.jp/main_sosiki/joho_tsusin/top/tel_number/shigai_list.html)
 - 行政区域: 国土数値情報（行政区域データ）N03、簡略化版は [smartnews-smri/japan-topography](https://github.com/smartnews-smri/japan-topography)
-- 背景地図: [地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)（淡色地図・白地図）
