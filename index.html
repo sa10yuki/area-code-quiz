@@ -17,11 +17,12 @@
 <body>
   <div class="app" id="app" data-phase="idle">
     <header class="topbar">
-      <h1 class="brand"><span class="brand-mark" aria-hidden="true">☎</span>市外局番クイズ</h1>
+      <h1 class="brand"><span class="brand-mark" aria-hidden="true">☎</span><span class="brand-text">市外局番クイズ</span></h1>
       <div class="progress" aria-live="polite">
         <div class="dots" id="dots" aria-hidden="true"></div>
         <span class="progress-text" id="progressText"></span>
       </div>
+      <button class="btn ghost small quit-btn" id="quitBtn" type="button">中断</button>
     </header>
 
     <main class="map-wrap">

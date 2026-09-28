@@ -104,7 +104,11 @@ button { font: inherit; }
   color: var(--accent-ink);
   font-size: 16px;
 }
-.progress { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.progress { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: auto; }
+/* quit button only while a set is in progress */
+.quit-btn { display: none; flex: none; }
+.app[data-phase="question"] .quit-btn,
+.app[data-phase="answered"] .quit-btn { display: inline-block; }
 .dots { display: flex; gap: 4px; }
 .dots i {
   width: 8px; height: 8px; border-radius: 50%;
@@ -460,6 +464,9 @@ button { font: inherit; }
   .code-list { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 }
 @media (max-width: 420px) {
+  /* make room for the quit button: keep only the ☎ mark during a set */
+  .app[data-phase="question"] .brand-text,
+  .app[data-phase="answered"] .brand-text { display: none; }
   .dots i { width: 6px; height: 6px; }
   .dots { gap: 3px; }
   .progress-text { font-size: 12px; }

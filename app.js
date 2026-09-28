@@ -530,6 +530,11 @@
 
   $('startBtn').addEventListener('click', () => startSet(selectedMode()));
   $('menuBtn').addEventListener('click', showMenu);
+  $('quitBtn').addEventListener('click', () => {
+    // answers are saved to stats one by one, so quitting only drops the unfinished set
+    if (state.results.length && !confirm('クイズを中断してメニューに戻る？\n（ここまでの回答は苦手リストに記録済みだよ）')) return;
+    showMenu();
+  });
   $('confirmBtn').addEventListener('click', confirmAnswer);
   $('nextBtn').addEventListener('click', next);
   document.addEventListener('keydown', (e) => {
