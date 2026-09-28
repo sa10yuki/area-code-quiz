@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>市外局番クイズ</title>
+  <meta name="description" content="市外局番（頭3桁）から地図上のエリアを当てるクイズ。10問1セット。">
+  <meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☎️</text></svg>">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app" id="app" data-phase="idle">
+    <header class="topbar">
+      <h1 class="brand"><span class="brand-mark" aria-hidden="true">☎</span>市外局番クイズ</h1>
+      <div class="progress" aria-live="polite">
+        <div class="dots" id="dots" aria-hidden="true"></div>
+        <span class="progress-text" id="progressText"></span>
+      </div>
+    </header>
+
+    <main class="map-wrap">
+      <div id="map" aria-label="日本地図。市外局番エリアごとに区切られています"></div>
+    </main>
+
+    <aside class="panel" id="panel">
+      <div class="qcard">
+        <p class="qlabel">この市外局番のエリアはどこ？</p>
+        <p class="qcode" id="qcode">---</p>
+      </div>
+      <div class="feedback" id="feedback" hidden>
+        <p class="verdict" id="verdict"></p>
+        <div class="answer-detail" id="answerDetail"></div>
+      </div>
+      <p class="hint" id="hint">地図でエリアをタップして選んでね</p>
+      <div class="actions">
+        <button class="btn primary" id="confirmBtn" disabled>これで決定！</button>
+        <button class="btn primary" id="nextBtn" hidden>次の問題へ</button>
+      </div>
+    </aside>
+
+    <!-- start screen -->
+    <section class="overlay" id="startScreen">
+      <div class="sheet">
+        <p class="eyebrow">頭3桁でおぼえる</p>
+        <h2 class="sheet-title">市外局番クイズ</h2>
+        <p class="lead">表示された市外局番（0AB）が使われているエリアを、地図の中から選んでね。全部で10問！</p>
+        <ul class="rules">
+          <li>地図は <strong>60エリア</strong> に区切られてるよ</li>
+          <li>ピンチやホイールで拡大できる</li>
+          <li>回答後はほかのエリアをタップすると局番が見れる</li>
+        </ul>
+        <label class="toggle">
+          <input type="checkbox" id="labelToggle" checked>
+          <span class="toggle-ui" aria-hidden="true"></span>
+          <span>地図に地名を表示する<small>オフにするとハードモード</small></span>
+        </label>
+        <button class="btn primary big" id="startBtn">スタート</button>
+        <p class="best" id="bestText"></p>
+      </div>
+    </section>
+
+    <!-- result screen -->
+    <section class="overlay" id="resultScreen" hidden>
+      <div class="sheet">
+        <p class="eyebrow">結果</p>
+        <p class="score"><span id="scoreNum">0</span><small>/ 10</small></p>
+        <p class="lead" id="scoreMsg"></p>
+        <ol class="result-list" id="resultList"></ol>
+        <div class="sheet-actions">
+          <button class="btn primary big" id="retryBtn">もう一回</button>
+          <button class="btn ghost" id="reviewBtn" hidden>間違えた局番だけ復習</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+  <script src="data/areas.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
