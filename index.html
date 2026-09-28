@@ -30,7 +30,7 @@
 
     <aside class="panel" id="panel">
       <div class="qcard">
-        <p class="qlabel">この市外局番のエリアはどこ？</p>
+        <p class="qlabel"><span class="mode-badge" id="modeBadge" hidden></span>この市外局番のエリアはどこ？</p>
         <p class="qcode" id="qcode">---</p>
       </div>
       <div class="feedback" id="feedback" hidden>
@@ -55,6 +55,21 @@
           <li>ピンチやホイールで拡大できる</li>
           <li>回答後はほかのエリアをタップすると局番が見れる</li>
         </ul>
+        <div class="modes" role="radiogroup" aria-label="モード">
+          <label class="mode">
+            <input type="radio" name="mode" value="normal" checked>
+            <span class="mode-ui"><b>ふつう</b><small>60エリアからランダムに10問</small></span>
+          </label>
+          <label class="mode">
+            <input type="radio" name="mode" value="weak" id="weakRadio">
+            <span class="mode-ui"><b>苦手克服</b><small id="weakDesc"></small></span>
+          </label>
+        </div>
+        <div class="weak-box" id="weakBox" hidden>
+          <p class="weak-head">苦手な局番 <small>2回連続で正解すると克服！</small></p>
+          <ul class="weak-list" id="weakList"></ul>
+          <button class="link-btn" id="resetBtn" type="button">成績をリセット</button>
+        </div>
         <label class="toggle">
           <input type="checkbox" id="labelToggle" checked>
           <span class="toggle-ui" aria-hidden="true"></span>
@@ -71,10 +86,15 @@
         <p class="eyebrow">結果</p>
         <p class="score"><span id="scoreNum">0</span><small>/ 10</small></p>
         <p class="lead" id="scoreMsg"></p>
+        <div class="overcome" id="overcomeBox" hidden>
+          <p class="overcome-head">克服した局番</p>
+          <p class="overcome-codes" id="overcomeCodes"></p>
+        </div>
         <ol class="result-list" id="resultList"></ol>
         <div class="sheet-actions">
           <button class="btn primary big" id="retryBtn">もう一回</button>
           <button class="btn ghost" id="reviewBtn" hidden>間違えた局番だけ復習</button>
+          <button class="btn ghost" id="menuBtn">メニューに戻る</button>
         </div>
       </div>
     </section>

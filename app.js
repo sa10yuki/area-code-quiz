@@ -27,6 +27,30 @@
   const features = topojson.feature(window.AREA_TOPO, window.AREA_TOPO.objects[objName]).features;
   const CODES = features.map((f) => f.properties.ab);
 
+  // ---------- weak-code tracking ----------
+  // A code is "weak" once answered wrong, until it is answered right OVERCOME_STREAK times in a row.
+  const OVERCOME_STREAK = 2;
+  const statOf = (code) => (store.stats && store.stats[code]) || { ok: 0, ng: 0, streak: 0 };
+  const isWeak = (code) => { const s = statOf(code); return s.ng > 0 && (s.streak || 0) < OVERCOME_STREAK; };
+  // Laplace-smoothed miss rate: higher = weaker
+  const weakness = (code) => { const s = statOf(code); return (s.ng + 1) / (s.ok + s.ng + 2); };
+  const weakCodes = () => CODES.filter(isWeak).sort((a, b) => weakness(b) - weakness(a));
+
+  function pickWeakSet() {
+    const pool = weakCodes().map((c) => ({ c, w: weakness(c) }));
+    const picked = [];
+    while (picked.length < QUESTIONS_PER_SET && pool.length) {
+      let r = Math.random() * pool.reduce((sum, p) => sum + p.w, 0);
+      let i = pool.findIndex((p) => (r -= p.w) <= 0);
+      if (i < 0) i = pool.length - 1;
+      picked.push(pool.splice(i, 1)[0].c);
+    }
+    // not enough weak codes: fill with never-asked codes first, then the rest
+    const unseen = shuffle(CODES.filter((c) => !picked.includes(c) && !(store.stats && store.stats[c])));
+    const rest = shuffle(CODES.filter((c) => !picked.includes(c) && !unseen.includes(c)));
+    return shuffle(picked.concat(unseen, rest).slice(0, QUESTIONS_PER_SET));
+  }
+
   // Greedy map coloring so neighbouring areas get different colors.
   const neighbors = topojson.neighbors(topoGeoms);
   const colorIdx = [];
@@ -110,6 +134,8 @@
   // ---------- quiz state ----------
   const state = {
     phase: 'idle', // idle | question | answered | done
+    mode: 'normal', // normal | weak | review
+    overcome: [],
     queue: [],
     index: 0,
     results: [],
@@ -182,10 +208,16 @@
       : '';
   }
 
-  function startSet(codes) {
-    state.queue = codes || shuffle(CODES).slice(0, QUESTIONS_PER_SET);
+  const MODE_LABEL = { weak: '苦手克服', review: '復習' };
+
+  function startSet(mode, codes) {
+    state.mode = mode;
+    state.queue = codes || (mode === 'weak' ? pickWeakSet() : shuffle(CODES).slice(0, QUESTIONS_PER_SET));
     state.index = 0;
     state.results = [];
+    state.overcome = [];
+    $('modeBadge').hidden = !MODE_LABEL[mode];
+    $('modeBadge').textContent = MODE_LABEL[mode] || '';
     $('startScreen').hidden = true;
     $('resultScreen').hidden = true;
     showQuestion();
@@ -266,11 +298,18 @@
     if (!ok) bounds.extend(areaLayers.get(state.selected).getBounds());
     map.flyToBounds(bounds, { padding: [30, 30], maxZoom: 8, duration: 0.7 });
 
-    // per-code stats for future use (weak-code review)
+    // per-code stats drive the weak-code mode
+    const wasWeak = isWeak(q);
     store.stats = store.stats || {};
-    const s = store.stats[q] = store.stats[q] || { ok: 0, ng: 0 };
-    ok ? s.ok++ : s.ng++;
+    const s = store.stats[q] = store.stats[q] || { ok: 0, ng: 0, streak: 0 };
+    if (ok) { s.ok++; s.streak = (s.streak || 0) + 1; } else { s.ng++; s.streak = 0; }
     saveStore(store);
+    if (wasWeak && !isWeak(q)) {
+      state.overcome.push(q);
+      v.textContent = '正解！ 苦手を克服 🎉';
+    } else if (ok && wasWeak) {
+      v.textContent = `正解！ あと${OVERCOME_STREAK - s.streak}回連続で克服`;
+    }
   }
 
   function next() {
@@ -305,11 +344,25 @@
       return `<li class="${r.ok ? 'ok' : 'ng'}"><span class="mark">${r.ok ? '○' : '×'}</span><span class="code">${r.code}</span><span class="where">${d.region}｜${d.places}</span></li>`;
     }).join('');
 
+    const remaining = weakCodes().length;
+    if (state.mode === 'weak') {
+      $('scoreMsg').textContent += remaining
+        ? `（残りの苦手：${remaining}個）`
+        : '（苦手な局番はぜんぶ克服！）';
+    }
+    $('overcomeBox').hidden = state.overcome.length === 0;
+    $('overcomeCodes').textContent = state.overcome.join('・');
+
     const wrong = state.results.filter((r) => !r.ok).map((r) => r.code);
     $('reviewBtn').hidden = wrong.length === 0;
-    $('reviewBtn').onclick = () => startSet(shuffle(wrong));
+    $('reviewBtn').onclick = () => startSet('review', shuffle(wrong));
+    // "もう一回" in weak mode makes no sense once everything is overcome
+    const retryMode = state.mode === 'weak' && !remaining ? 'normal' : state.mode === 'review' ? 'normal' : state.mode;
+    $('retryBtn').textContent = retryMode === 'weak' ? '苦手克服をもう一回'
+      : state.mode === 'normal' ? 'もう一回' : 'ふつうモードで10問';
+    $('retryBtn').onclick = () => startSet(retryMode);
 
-    if (total === QUESTIONS_PER_SET && score > (store.best || 0)) {
+    if (state.mode === 'normal' && score > (store.best || 0)) {
       store.best = score;
       saveStore(store);
     }
@@ -329,10 +382,55 @@
   labelToggle.addEventListener('change', applyLabels);
   applyLabels();
 
-  if (store.best) $('bestText').textContent = `自己ベスト：${store.best} / ${QUESTIONS_PER_SET}`;
+  const modeRadios = [...document.querySelectorAll('input[name="mode"]')];
+  const selectedMode = () => modeRadios.find((r) => r.checked).value;
 
-  $('startBtn').addEventListener('click', () => startSet());
-  $('retryBtn').addEventListener('click', () => startSet());
+  function renderStartScreen() {
+    const weak = weakCodes();
+    const weakRadio = $('weakRadio');
+    weakRadio.disabled = weak.length === 0;
+    $('weakDesc').textContent = weak.length
+      ? `苦手な${weak.length}個を中心に10問`
+      : 'まだ苦手な局番はないよ';
+    if (weakRadio.disabled && weakRadio.checked) modeRadios[0].checked = true;
+    else if (!weakRadio.disabled && store.mode === 'weak') weakRadio.checked = true;
+
+    $('weakBox').hidden = weak.length === 0;
+    $('weakList').innerHTML = weak.slice(0, 12).map((c) => {
+      const s = statOf(c);
+      const rate = Math.round((s.ok / (s.ok + s.ng)) * 100);
+      return `<li title="${describe(c).region}"><b>${c}</b><small>正解率${rate}%</small></li>`;
+    }).join('') + (weak.length > 12 ? `<li class="more">ほか${weak.length - 12}個</li>` : '');
+
+    $('bestText').textContent = store.best ? `自己ベスト（ふつう）：${store.best} / ${QUESTIONS_PER_SET}` : '';
+  }
+
+  function showMenu() {
+    setPhase('idle');
+    state.queue = [];
+    state.results = [];
+    clearBadges();
+    map.closePopup();
+    restyleAll();
+    renderProgress();
+    $('qcode').textContent = '---';
+    $('modeBadge').hidden = true;
+    $('resultScreen').hidden = true;
+    renderStartScreen();
+    $('startScreen').hidden = false;
+  }
+
+  $('resetBtn').addEventListener('click', () => {
+    if (!confirm('局番ごとの成績（苦手リスト）をリセットする？')) return;
+    delete store.stats;
+    saveStore(store);
+    renderStartScreen();
+  });
+  modeRadios.forEach((r) => r.addEventListener('change', () => { store.mode = selectedMode(); saveStore(store); }));
+  renderStartScreen();
+
+  $('startBtn').addEventListener('click', () => startSet(selectedMode()));
+  $('menuBtn').addEventListener('click', showMenu);
   $('confirmBtn').addEventListener('click', confirmAnswer);
   $('nextBtn').addEventListener('click', next);
   document.addEventListener('keydown', (e) => {
