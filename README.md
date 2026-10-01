@@ -71,6 +71,28 @@ node build-data.mjs 3       # data/areas3.js を出力
 node build-data.mjs 4       # data/areas4.js を出力
 ```
 
+## データの検証
+
+総務省PDFとは別ルートの3つのソースと、市町村ごとに割り当てた局番を突き合わせた（2026年10月時点）。
+
+| ソース | 照合できた市町村 | 食い違い | 食い違いの内訳 |
+|---|---|---|---|
+| Wikipedia 各市町村記事の「市外局番」の記述 | 562 | 7 | 市の一部だけ別局番（妙高・磐田・たつの）、昔の局番の記述（魚沼・能勢）、局番と無関係な文を拾った（新潟市秋葉区） |
+| OpenStreetMap の役所・支所の電話番号 | 381（505か所） | 10 | 支所が別局番の地区にある（西宮・せたな・北見・鳥取）、OSMの登録ミス（甲賀）、**東北町** |
+| Wikidata の市外局番（P473） | 117 | 5 | 市の一部だけ別局番（御前崎・伊豆）、Wikidata側の誤り・旧局番（七飯・都城）、国際表記（いちき串木野） |
+
+- 3つ合わせて 869 / 1896 市区町村（46%）を照合し、総務省PDFの記載と矛盾するものはなかった
+- 東北町（青森）は、役場が 0176 の地区（旧上北町）にあるが、総務省PDFが「東北町（旭北…を除く）」を 0175 側に書いているため 0175 に割り当てている
+- PDFの読み取りは、全582行で「市外局番＋市内局番＝5桁」が成り立つことを確認
+
+```bash
+cd tools
+node fetch-wiki-codes.mjs   # Wikidata で記事名を引き、Wikipedia から「市外局番」の記述を収集
+node compare-wiki.mjs       # 割り当てと比較
+# OSM: Overpass API で amenity=townhall かつ phone/contact:phone 付きを raw/osm-townhalls.json に保存してから
+node compare-osm.mjs
+```
+
 ## 出典
 
 - 市外局番: [総務省「市外局番の一覧」](https://www.soumu.go.jp/main_sosiki/joho_tsusin/top/tel_number/shigai_list.html)
