@@ -239,6 +239,39 @@ button { font: inherit; }
 .sheet-title { margin: 4px 0 10px; font-family: var(--font-round); font-weight: 800; font-size: 30px; }
 .lead { margin: 0 0 14px; line-height: 1.7; color: var(--ink-2); font-size: 14.5px; }
 .rules { margin: 0 0 18px; padding: 12px 14px 12px 32px; background: var(--surface-2); border-radius: 14px; font-size: 13.5px; line-height: 1.8; }
+/* digit-level tabs (top of the start screen) */
+.level-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  margin: -6px 0 18px;
+  border-radius: 16px;
+  background: var(--surface-2);
+}
+.level-tab {
+  appearance: none;
+  border: 0;
+  border-radius: 12px;
+  padding: 9px 8px 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-round);
+  font-weight: 800;
+  font-size: 16px;
+  cursor: pointer;
+  display: grid;
+  gap: 1px;
+  transition: background .15s, color .15s, box-shadow .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.level-tab small { font-family: var(--font); font-weight: 500; font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.level-tab:hover:not(.on) { color: var(--ink); }
+.level-tab.on { background: var(--surface); color: var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .12); }
+.level-tab:focus-visible { outline: 3px solid var(--select); outline-offset: 2px; }
+/* while the 4-digit data downloads */
+.sheet.loading > :not(.level-tabs) { opacity: .45; pointer-events: none; transition: opacity .15s; }
+
 /* mode selector */
 .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 12px; }
 .mode { position: relative; cursor: pointer; }
@@ -284,6 +317,8 @@ button { font: inherit; }
   font-weight: 700;
   vertical-align: 1px;
 }
+/* normal mode: only the digit level, in a quieter color */
+.mode-badge.plain { background: var(--ink-2); }
 .overcome { margin: 0 0 14px; padding: 12px 14px; border-radius: 14px; background: var(--ok-soft); }
 .overcome-head { margin: 0 0 2px; font-size: 12px; font-weight: 700; color: var(--ok); }
 .overcome-codes { margin: 0; font-family: var(--font-round); font-weight: 800; font-size: 20px; color: var(--ok); letter-spacing: .04em; }

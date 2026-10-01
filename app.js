@@ -7,6 +7,10 @@
   const PALETTE_LIGHT = ['#f6cf7d', '#9fd9b9', '#f3b2c7', '#cdb8f0', '#cde596', '#f4bb97'];
   const PALETTE_DARK = ['#80652e', '#2e6e52', '#81455b', '#5a4a86', '#5a722b', '#7f5236'];
   const STORE_KEY = 'areaCodeQuiz.v1';
+  const LEVELS = {
+    3: { eyebrow: '頭3桁でおぼえる', pattern: '0AB', zoom: 8 },
+    4: { eyebrow: '頭4桁でおぼえる', pattern: '0ABC', zoom: 9 },
+  };
 
   const $ = (id) => document.getElementById(id);
   const app = $('app');
@@ -21,64 +25,18 @@
     try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch { /* ignore */ }
   }
   const store = loadStore();
+  // 3-digit records keep their original keys so existing progress survives.
+  const statsKey = () => (DS.level === 3 ? 'stats' : `stats${DS.level}`);
+  const bestKey = () => (DS.level === 3 ? 'best' : `best${DS.level}`);
+  const levelStats = () => store[statsKey()] || {};
 
-  // ---------- area data ----------
-  const META = window.AREA_META;
-  const topoGeoms = window.AREA_TOPO.objects.areas.geometries;
-  const features = topojson.feature(window.AREA_TOPO, window.AREA_TOPO.objects.areas).features;
-  const CODES = features.map((f) => f.properties.ab);
-
-  // ---------- weak-code tracking ----------
-  // A code is "weak" once answered wrong, until it is answered right OVERCOME_STREAK times in a row.
-  const OVERCOME_STREAK = 2;
-  const statOf = (code) => (store.stats && store.stats[code]) || { ok: 0, ng: 0, streak: 0 };
-  const isWeak = (code) => { const s = statOf(code); return s.ng > 0 && (s.streak || 0) < OVERCOME_STREAK; };
-  // Laplace-smoothed miss rate: higher = weaker
-  const weakness = (code) => { const s = statOf(code); return (s.ng + 1) / (s.ok + s.ng + 2); };
-  const weakCodes = () => CODES.filter(isWeak).sort((a, b) => weakness(b) - weakness(a));
-
-  function pickWeakSet() {
-    const pool = weakCodes().map((c) => ({ c, w: weakness(c) }));
-    const picked = [];
-    while (picked.length < QUESTIONS_PER_SET && pool.length) {
-      let r = Math.random() * pool.reduce((sum, p) => sum + p.w, 0);
-      let i = pool.findIndex((p) => (r -= p.w) <= 0);
-      if (i < 0) i = pool.length - 1;
-      picked.push(pool.splice(i, 1)[0].c);
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
     }
-    // not enough weak codes: fill with never-asked codes first, then the rest
-    const unseen = shuffle(CODES.filter((c) => !picked.includes(c) && !(store.stats && store.stats[c])));
-    const rest = shuffle(CODES.filter((c) => !picked.includes(c) && !unseen.includes(c)));
-    return shuffle(picked.concat(unseen, rest).slice(0, QUESTIONS_PER_SET));
-  }
-
-  // Greedy map coloring so neighbouring areas get different colors.
-  const neighbors = topojson.neighbors(topoGeoms);
-  const colorIdx = [];
-  features.forEach((_, i) => {
-    const used = new Set(neighbors[i].map((j) => colorIdx[j]).filter((c) => c !== undefined));
-    let c = 0;
-    while (used.has(c)) c++;
-    colorIdx[i] = c % PALETTE_LIGHT.length;
-  });
-
-  function fullPlaces(code) {
-    const m = META[code];
-    return m.cities.join('・') + (m.towns ? `${m.cities.length ? ' ほか' : ''}${m.towns}町村` : '');
-  }
-
-  function describe(code) {
-    const m = META[code];
-    let region = m.prefs.join('・');
-    if (m.subs.length && m.prefs.length === 1) {
-      region += '（' + m.subs.map((s) => s.replace(/(総合)?振興局$/, '')).join('・') + '）';
-    }
-    const shown = m.cities.slice(0, 4);
-    const rest = m.cities.length - shown.length + m.towns;
-    let places = shown.join('・');
-    if (!places) places = `${m.towns}町村`;
-    else if (rest > 0) places += ` <small>ほか${rest}市町村</small>`;
-    return { region, places };
+    return a;
   }
 
   // ---------- map ----------
@@ -97,52 +55,165 @@
   map.createPane('lines');
   map.getPane('lines').style.zIndex = 450;
   map.getPane('lines').style.pointerEvents = 'none';
-  const prefLines = L.geoJSON(topojson.feature(window.AREA_TOPO, window.AREA_TOPO.objects.preflines), {
-    pane: 'lines', interactive: false, style: () => prefLineStyle(),
-  }).addTo(map);
-  function prefLineStyle() {
-    return { color: cssVar('--pref-line'), weight: 1.2, dashArray: '4 3', opacity: 0.8 };
+  const prefLineStyle = () => ({ color: cssVar('--pref-line'), weight: 1.2, dashArray: '4 3', opacity: 0.8 });
+
+  // ---------- datasets (one per digit level) ----------
+  const datasets = {};
+  let DS = null; // the active dataset
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error(`failed to load ${src}`));
+      document.head.appendChild(s);
+    });
   }
 
-  const areaLayers = new Map(); // code -> L.GeoJSON layer
-  const labelPoints = new Map(); // code -> LatLng for the code badge
-  const mainPieces = new Map(); // code -> largest polygon piece (for label visibility)
+  async function getDataset(level) {
+    if (datasets[level]) return datasets[level];
+    if (!(window.AREA_DATA && window.AREA_DATA[level])) await loadScript(`data/areas${level}.js`);
+    const { topo, meta } = window.AREA_DATA[level];
+    const geoms = topo.objects.areas.geometries;
+    const features = topojson.feature(topo, topo.objects.areas).features;
+    const codes = features.map((f) => f.properties.ab);
+    const ds = {
+      level,
+      meta,
+      codes,
+      sorted: codes.slice().sort(),
+      // in the 4-digit level, codes that are only 2–3 digits stay on the map as
+      // choices but are not asked (they are the 3-digit level's questions)
+      quizCodes: codes.filter((c) => c.length === level),
+      colorIdx: new Map(),
+      layers: new Map(), // code -> L.GeoJSON
+      labelPoints: new Map(), // code -> LatLng for the code badge
+      mainPieces: new Map(), // code -> largest polygon piece (for label visibility)
+      group: L.layerGroup(),
+    };
 
-  function baseStyle(code) {
-    const i = CODES.indexOf(code);
+    // Greedy map coloring so neighbouring areas get different colors.
+    const neighbors = topojson.neighbors(geoms);
+    const idx = [];
+    features.forEach((f, i) => {
+      const used = new Set(neighbors[i].map((j) => idx[j]).filter((c) => c !== undefined));
+      let c = 0;
+      while (used.has(c)) c++;
+      idx[i] = c % PALETTE_LIGHT.length;
+      ds.colorIdx.set(f.properties.ab, idx[i]);
+    });
+
+    features.forEach((f) => {
+      const code = f.properties.ab;
+      const layer = L.geoJSON(f, { style: () => baseStyle(code, ds), smoothFactor: 0.6 });
+      layer.on('click', () => onAreaClick(code));
+      layer.on('mouseover', () => onAreaHover(code, true));
+      layer.on('mouseout', () => onAreaHover(code, false));
+      ds.layers.set(code, layer);
+      ds.group.addLayer(layer);
+    });
+
+    ds.prefLines = L.geoJSON(topojson.feature(topo, topo.objects.preflines), {
+      pane: 'lines', interactive: false, style: prefLineStyle,
+    });
+    ds.group.addLayer(ds.prefLines);
+    datasets[level] = ds;
+    return ds;
+  }
+
+  function useDataset(ds) {
+    if (DS === ds) return;
+    if (DS) map.removeLayer(DS.group);
+    DS = ds;
+    DS.group.addTo(map);
+    // Polygon#getCenter only works once the layer is on the map, so badge
+    // positions (center of each area's largest piece) are computed here, once.
+    if (!DS.labelPoints.size) {
+      DS.layers.forEach((layer, code) => {
+        let best = null, bestSize = -1;
+        layer.eachLayer((poly) => {
+          const b = poly.getBounds();
+          const size = (b.getNorth() - b.getSouth()) * (b.getEast() - b.getWest());
+          if (size > bestSize) { bestSize = size; best = poly; }
+        });
+        DS.labelPoints.set(code, best.getCenter());
+        DS.mainPieces.set(code, best);
+      });
+    }
+    restyleAll();
+  }
+
+  function baseStyle(code, ds = DS) {
     return {
       color: dark.matches ? '#16181c' : '#ffffff',
       weight: 1.2,
-      fillColor: (dark.matches ? PALETTE_DARK : PALETTE_LIGHT)[colorIdx[i]],
+      fillColor: (dark.matches ? PALETTE_DARK : PALETTE_LIGHT)[ds.colorIdx.get(code)],
       fillOpacity: 1,
       opacity: 1,
     };
   }
 
-  features.forEach((f) => {
-    const code = f.properties.ab;
-    const layer = L.geoJSON(f, { style: () => baseStyle(code), smoothFactor: 0.6 }).addTo(map);
-    layer.on('click', () => onAreaClick(code));
-    layer.on('mouseover', () => onAreaHover(code, true));
-    layer.on('mouseout', () => onAreaHover(code, false));
-    areaLayers.set(code, layer);
-
-    // badge position: center of the largest polygon piece
-    let best = null, bestSize = -1;
-    layer.eachLayer((poly) => {
-      const b = poly.getBounds();
-      const size = (b.getNorth() - b.getSouth()) * (b.getEast() - b.getWest());
-      if (size > bestSize) { bestSize = size; best = poly; }
-    });
-    labelPoints.set(code, best.getCenter());
-    mainPieces.set(code, best);
+  dark.addEventListener('change', () => {
+    if (!DS) return;
+    restyleAll();
+    DS.prefLines.setStyle(prefLineStyle());
   });
 
-  dark.addEventListener('change', () => { restyleAll(); prefLines.setStyle(prefLineStyle()); });
+  // ---------- area descriptions ----------
+  function regionOf(code) {
+    const m = DS.meta[code];
+    let region = m.prefs.join('・');
+    if (m.subs.length && m.prefs.length === 1) {
+      region += '（' + m.subs.map((s) => s.replace(/(総合)?振興局$/, '')).join('・') + '）';
+    }
+    return region;
+  }
+
+  function describe(code) {
+    const m = DS.meta[code];
+    // small 4-digit areas often have no city at all, so fall back to town names
+    const names = m.cities.length ? m.cities : m.towns;
+    const shown = names.slice(0, 4);
+    const rest = m.cities.length + m.towns.length - shown.length;
+    let places = shown.join('・');
+    if (rest > 0) places += ` <small>ほか${rest}市町村</small>`;
+    return { region: regionOf(code), places };
+  }
+
+  const fullPlaces = (code) => {
+    const m = DS.meta[code];
+    return m.cities.concat(m.towns).join('・');
+  };
+
+  // ---------- weak-code tracking ----------
+  // A code is "weak" once answered wrong, until it is answered right OVERCOME_STREAK times in a row.
+  const OVERCOME_STREAK = 2;
+  const statOf = (code) => levelStats()[code] || { ok: 0, ng: 0, streak: 0 };
+  const isWeak = (code) => { const s = statOf(code); return s.ng > 0 && (s.streak || 0) < OVERCOME_STREAK; };
+  // Laplace-smoothed miss rate: higher = weaker
+  const weakness = (code) => { const s = statOf(code); return (s.ng + 1) / (s.ok + s.ng + 2); };
+  const weakCodes = () => DS.quizCodes.filter(isWeak).sort((a, b) => weakness(b) - weakness(a));
+
+  function pickWeakSet() {
+    const pool = weakCodes().map((c) => ({ c, w: weakness(c) }));
+    const picked = [];
+    while (picked.length < QUESTIONS_PER_SET && pool.length) {
+      let r = Math.random() * pool.reduce((sum, p) => sum + p.w, 0);
+      let i = pool.findIndex((p) => (r -= p.w) <= 0);
+      if (i < 0) i = pool.length - 1;
+      picked.push(pool.splice(i, 1)[0].c);
+    }
+    // not enough weak codes: fill with never-asked codes first, then the rest
+    const stats = levelStats();
+    const unseen = shuffle(DS.quizCodes.filter((c) => !picked.includes(c) && !stats[c]));
+    const rest = shuffle(DS.quizCodes.filter((c) => !picked.includes(c) && !unseen.includes(c)));
+    return shuffle(picked.concat(unseen, rest).slice(0, QUESTIONS_PER_SET));
+  }
 
   // ---------- quiz state ----------
   const state = {
-    phase: 'idle', // idle | question | answered | done
+    phase: 'idle', // idle | question | answered | done | browse
     mode: 'normal', // normal | weak | review
     overcome: [],
     queue: [],
@@ -152,15 +223,6 @@
   };
   let badges = [];
 
-  function shuffle(arr) {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-  }
-
   function setPhase(p) {
     state.phase = p;
     app.dataset.phase = p;
@@ -169,10 +231,11 @@
   function current() { return state.queue[state.index]; }
 
   function restyleAll() {
+    if (!DS) return;
     const q = current();
     const last = state.results[state.index];
     const selectable = state.phase === 'question' || state.phase === 'browse';
-    areaLayers.forEach((layer, code) => {
+    DS.layers.forEach((layer, code) => {
       let s = baseStyle(code);
       if (selectable && code === state.selected) {
         s = { ...s, color: cssVar('--select'), weight: 3, fillColor: cssVar('--select-fill') };
@@ -183,10 +246,10 @@
       }
       layer.setStyle(s);
     });
-    if (selectable && state.selected) areaLayers.get(state.selected).bringToFront();
+    if (selectable && state.selected) DS.layers.get(state.selected).bringToFront();
     if (state.phase === 'answered') {
-      if (last && !last.ok && last.picked) areaLayers.get(last.picked).bringToFront();
-      areaLayers.get(q).bringToFront();
+      if (last && !last.ok && last.picked) DS.layers.get(last.picked).bringToFront();
+      DS.layers.get(q).bringToFront();
     }
   }
 
@@ -196,7 +259,7 @@
   }
   function addBadge(code, className = 'area-label big') {
     const b = L.tooltip({ permanent: true, direction: 'center', className, interactive: false })
-      .setLatLng(labelPoints.get(code))
+      .setLatLng(DS.labelPoints.get(code))
       .setContent(code)
       .addTo(map);
     b.code = code;
@@ -209,10 +272,11 @@
   function updateBrowseLabels() {
     if (state.phase !== 'browse') return;
     badges.forEach((b) => {
-      const bounds = mainPieces.get(b.code).getBounds();
+      const bounds = DS.mainPieces.get(b.code).getBounds();
       const nw = map.latLngToContainerPoint(bounds.getNorthWest());
       const se = map.latLngToContainerPoint(bounds.getSouthEast());
-      const fits = se.x - nw.x >= 34 && se.y - nw.y >= 22;
+      const minW = b.code.length >= 4 ? 42 : 34;
+      const fits = se.x - nw.x >= minW && se.y - nw.y >= 22;
       const el = b.getElement();
       if (el) el.style.display = fits || b.code === state.selected ? '' : 'none';
     });
@@ -239,12 +303,14 @@
 
   function startSet(mode, codes) {
     state.mode = mode;
-    state.queue = codes || (mode === 'weak' ? pickWeakSet() : shuffle(CODES).slice(0, QUESTIONS_PER_SET));
+    state.queue = codes || (mode === 'weak' ? pickWeakSet() : shuffle(DS.quizCodes).slice(0, QUESTIONS_PER_SET));
     state.index = 0;
     state.results = [];
     state.overcome = [];
-    $('modeBadge').hidden = !MODE_LABEL[mode];
-    $('modeBadge').textContent = MODE_LABEL[mode] || '';
+    const badge = [`${DS.level}桁`, MODE_LABEL[mode]].filter(Boolean).join('・');
+    $('modeBadge').textContent = badge;
+    $('modeBadge').hidden = false;
+    $('modeBadge').classList.toggle('plain', !MODE_LABEL[mode]);
     $('startScreen').hidden = true;
     $('resultScreen').hidden = true;
     showQuestion();
@@ -277,7 +343,7 @@
     } else if (state.phase === 'answered') {
       const d = describe(code);
       L.popup({ closeButton: false, autoPan: false, className: 'area-pop' })
-        .setLatLng(labelPoints.get(code))
+        .setLatLng(DS.labelPoints.get(code))
         .setContent(`<b style="font-size:16px">${code}</b><br>${d.region}<br>${d.places}`)
         .openOn(map);
     }
@@ -285,10 +351,8 @@
 
   function onAreaHover(code, on) {
     if (!matchMedia('(hover: hover)').matches) return;
-    const layer = areaLayers.get(code);
-    if (state.phase === 'question' && code !== state.selected) {
-      layer.setStyle(on ? { weight: 2.5, color: cssVar('--select') } : baseStyle(code));
-    } else if (state.phase === 'browse' && code !== state.selected) {
+    const layer = DS.layers.get(code);
+    if ((state.phase === 'question' || state.phase === 'browse') && code !== state.selected) {
       layer.setStyle(on ? { weight: 2.5, color: cssVar('--select') } : baseStyle(code));
     } else if (state.phase === 'answered') {
       if (on) layer.bindTooltip(code, { sticky: true, className: 'area-tip' }).openTooltip();
@@ -325,14 +389,14 @@
     addBadge(q);
     if (!ok) addBadge(state.selected);
 
-    const bounds = areaLayers.get(q).getBounds();
-    if (!ok) bounds.extend(areaLayers.get(state.selected).getBounds());
-    map.flyToBounds(bounds, { padding: [30, 30], maxZoom: 8, duration: 0.7 });
+    const bounds = DS.layers.get(q).getBounds();
+    if (!ok) bounds.extend(DS.layers.get(state.selected).getBounds());
+    map.flyToBounds(bounds, { padding: [30, 30], maxZoom: LEVELS[DS.level].zoom, duration: 0.7 });
 
     // per-code stats drive the weak-code mode
     const wasWeak = isWeak(q);
-    store.stats = store.stats || {};
-    const s = store.stats[q] = store.stats[q] || { ok: 0, ng: 0, streak: 0 };
+    const stats = store[statsKey()] = levelStats();
+    const s = stats[q] = stats[q] || { ok: 0, ng: 0, streak: 0 };
     if (ok) { s.ok++; s.streak = (s.streak || 0) + 1; } else { s.ng++; s.streak = 0; }
     saveStore(store);
     if (wasWeak && !isWeak(q)) {
@@ -393,44 +457,42 @@
       : state.mode === 'normal' ? 'もう一回' : 'ふつうモードで10問';
     $('retryBtn').onclick = () => startSet(retryMode);
 
-    if (state.mode === 'normal' && score > (store.best || 0)) {
-      store.best = score;
+    if (state.mode === 'normal' && score > (store[bestKey()] || 0)) {
+      store[bestKey()] = score;
       saveStore(store);
     }
     $('resultScreen').hidden = false;
     $('retryBtn').focus({ preventScroll: true });
   }
 
-  // ---------- wiring ----------
   // ---------- browse mode ----------
-  const SORTED_CODES = CODES.slice().sort();
   const toHalfWidth = (s) => s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
 
   function matchesQuery(code, query) {
     const q = toHalfWidth(query.trim());
     if (!q) return true;
     if (/^\d+$/.test(q)) return code.startsWith(q) || code.startsWith('0' + q);
-    const m = META[code];
+    const m = DS.meta[code];
     return m.prefs.some((p) => p.includes(q) || q.includes(p))
       || m.subs.some((s) => s.includes(q))
-      || m.cities.some((c) => c.includes(q));
+      || m.cities.some((c) => c.includes(q))
+      || m.towns.some((t) => t.includes(q));
   }
 
   function renderCodeList() {
     const query = $('search').value;
-    const hits = SORTED_CODES.filter((c) => matchesQuery(c, query));
+    const hits = DS.sorted.filter((c) => matchesQuery(c, query));
     $('codeList').innerHTML = hits.length
-      ? hits.map((c) => `<li><button type="button" data-code="${c}" class="${c === state.selected ? 'on' : ''}"><b>${c}</b><span>${describe(c).region}</span></button></li>`).join('')
+      ? hits.map((c) => `<li><button type="button" data-code="${c}" class="${c === state.selected ? 'on' : ''}"><b>${c}</b><span>${regionOf(c)}</span></button></li>`).join('')
       : '<li class="no-hit">見つからなかった…</li>';
     return hits;
   }
 
   function renderBrowseDetail(code) {
-    const d = describe(code);
-    const s = store.stats && store.stats[code];
+    const s = levelStats()[code];
     const record = s ? `<p class="bd-stat">あなたの成績：${s.ok}勝 ${s.ng}敗${isWeak(code) ? '（苦手）' : ''}</p>` : '';
     $('browseDetail').innerHTML = `
-      <div class="bd-head"><b class="bd-code">${code}</b><span class="bd-region">${d.region}</span></div>
+      <div class="bd-head"><b class="bd-code">${code}</b><span class="bd-region">${regionOf(code)}</span></div>
       <p class="bd-places">${fullPlaces(code)}</p>${record}`;
   }
 
@@ -442,7 +504,7 @@
     updateBrowseLabels();
     const btn = $('codeList').querySelector(`[data-code="${code}"]`);
     if (btn) btn.scrollIntoView({ block: 'nearest' });
-    if (fly) map.flyToBounds(areaLayers.get(code).getBounds(), { padding: [30, 30], maxZoom: 8, duration: 0.6 });
+    if (fly) map.flyToBounds(DS.layers.get(code).getBounds(), { padding: [30, 30], maxZoom: LEVELS[DS.level].zoom, duration: 0.6 });
   }
 
   function startBrowse() {
@@ -452,15 +514,16 @@
     state.selected = null;
     map.closePopup();
     clearBadges();
-    CODES.forEach((c) => addBadge(c, 'area-label'));
+    DS.codes.forEach((c) => addBadge(c, 'area-label'));
     $('startScreen').hidden = true;
     $('resultScreen').hidden = true;
     $('search').value = '';
+    $('search').placeholder = DS.level === 3 ? '局番・地名で検索（例: 045、札幌）' : '局番・地名で検索（例: 0466、帯広）';
     $('browseDetail').innerHTML = '<p class="browse-empty">地図のエリアか、下の一覧から選んでね</p>';
     renderCodeList();
     restyleAll();
     renderProgress();
-    $('progressText').textContent = '閲覧モード';
+    $('progressText').textContent = `閲覧モード（${DS.level}桁）`;
     map.flyToBounds(JAPAN_BOUNDS, { duration: 0.6 });
     // labels are measured after the fly animation settles
     map.once('moveend', updateBrowseLabels);
@@ -470,7 +533,7 @@
   $('search').addEventListener('input', renderCodeList);
   $('search').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
-    const first = SORTED_CODES.find((c) => matchesQuery(c, $('search').value));
+    const first = DS.sorted.find((c) => matchesQuery(c, $('search').value));
     if (first) selectBrowse(first, true);
   });
   $('codeList').addEventListener('click', (e) => {
@@ -480,10 +543,25 @@
   $('browseBtn').addEventListener('click', startBrowse);
   $('browseExitBtn').addEventListener('click', () => showMenu());
 
+  // ---------- start screen ----------
   const modeRadios = [...document.querySelectorAll('input[name="mode"]')];
   const selectedMode = () => modeRadios.find((r) => r.checked).value;
+  const levelTabs = [...document.querySelectorAll('.level-tab')];
 
   function renderStartScreen() {
+    const cfg = LEVELS[DS.level];
+    levelTabs.forEach((t) => {
+      const on = +t.dataset.level === DS.level;
+      t.classList.toggle('on', on);
+      t.setAttribute('aria-selected', on);
+      t.tabIndex = on ? 0 : -1;
+    });
+    $('levelEyebrow').textContent = cfg.eyebrow;
+    $('levelPattern').textContent = cfg.pattern;
+    $('areaCount').textContent = `${DS.codes.length}エリア`;
+    $('normalDesc').textContent = `${DS.quizCodes.length}個の局番からランダムに10問`;
+    $('levelNote').hidden = DS.level === 3;
+
     const weak = weakCodes();
     const weakRadio = $('weakRadio');
     weakRadio.disabled = weak.length === 0;
@@ -497,11 +575,38 @@
     $('weakList').innerHTML = weak.slice(0, 12).map((c) => {
       const s = statOf(c);
       const rate = Math.round((s.ok / (s.ok + s.ng)) * 100);
-      return `<li title="${describe(c).region}"><b>${c}</b><small>正解率${rate}%</small></li>`;
+      return `<li title="${regionOf(c)}"><b>${c}</b><small>正解率${rate}%</small></li>`;
     }).join('') + (weak.length > 12 ? `<li class="more">ほか${weak.length - 12}個</li>` : '');
 
-    $('bestText').textContent = store.best ? `自己ベスト（ふつう）：${store.best} / ${QUESTIONS_PER_SET}` : '';
+    const best = store[bestKey()];
+    $('bestText').textContent = best ? `自己ベスト（${DS.level}桁・ふつう）：${best} / ${QUESTIONS_PER_SET}` : '';
   }
+
+  async function switchLevel(level) {
+    if (DS && DS.level === level) return;
+    const sheet = $('startScreen').querySelector('.sheet');
+    sheet.classList.add('loading');
+    try {
+      useDataset(await getDataset(level));
+      store.level = level;
+      saveStore(store);
+    } catch (err) {
+      alert('地図データを読み込めなかった…通信状況を確認してね');
+    } finally {
+      sheet.classList.remove('loading');
+      renderStartScreen();
+    }
+  }
+
+  levelTabs.forEach((t) => t.addEventListener('click', () => switchLevel(+t.dataset.level)));
+  // arrow keys move between tabs (WAI-ARIA tabs pattern)
+  $('levelTabs').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const i = levelTabs.findIndex((t) => +t.dataset.level === DS.level);
+    const nextTab = levelTabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + levelTabs.length) % levelTabs.length];
+    nextTab.focus();
+    switchLevel(+nextTab.dataset.level);
+  });
 
   function showMenu() {
     setPhase('idle');
@@ -520,13 +625,12 @@
   }
 
   $('resetBtn').addEventListener('click', () => {
-    if (!confirm('局番ごとの成績（苦手リスト）をリセットする？')) return;
-    delete store.stats;
+    if (!confirm(`${DS.level}桁モードの成績（苦手リスト）をリセットする？`)) return;
+    delete store[statsKey()];
     saveStore(store);
     renderStartScreen();
   });
   modeRadios.forEach((r) => r.addEventListener('change', () => { store.mode = selectedMode(); saveStore(store); }));
-  renderStartScreen();
 
   $('startBtn').addEventListener('click', () => startSet(selectedMode()));
   $('menuBtn').addEventListener('click', showMenu);
@@ -545,4 +649,15 @@
 
   // Leaflet needs a size recalculation when the grid changes (rotation / resize).
   new ResizeObserver(() => map.invalidateSize()).observe($('map'));
+
+  // ---------- boot ----------
+  (async () => {
+    const level = LEVELS[store.level] ? store.level : 3;
+    try {
+      useDataset(await getDataset(level));
+    } catch {
+      useDataset(await getDataset(3)); // the 3-digit data ships with the page
+    }
+    renderStartScreen();
+  })();
 })();

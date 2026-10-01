@@ -18,7 +18,9 @@ for (const r of rows) {
 }
 const noCode = entries.filter(e => !e.code);
 if (noCode.length) console.log('NO CODE:', noCode);
-const to0AB = c => '0' + c.slice(0, 2);
+// LEVEL = number of leading digits (incl. the 0) to group by: 3 -> 045, 0123 -> 012; 4 -> 0123, 01267 -> 0126
+const LEVEL = +(process.argv[2] || 3);
+const to0AB = c => '0' + c.slice(0, LEVEL - 1);
 entries.forEach(e => e.ab = to0AB(e.code));
 
 // ---- 2. units ----
@@ -129,6 +131,8 @@ console.log('entries', entries.length, 'units', U.length, 'assigned', Object.key
 console.log('UNMATCHED', unmatched.length, unmatched.slice(0, 80));
 console.log('UNASSIGNED', report.unassigned);
 console.log('TIES', report.ties);
-fs.writeFileSync('out/assign.json', JSON.stringify(assign));
-fs.writeFileSync('out/entries.json', JSON.stringify(entries, null, 1));
-fs.writeFileSync('out/units.json', JSON.stringify(U.map(({ claims, ...u }) => ({ ...u, ab: assign[u.code] }))));
+const lost = [...new Set(entries.map(e => e.ab))].filter(ab => !Object.values(assign).includes(ab));
+console.log('CODES WITHOUT ANY WHOLE UNIT', lost.length, lost.join(' '));
+fs.writeFileSync(`out/assign${LEVEL}.json`, JSON.stringify(assign));
+fs.writeFileSync(`out/assign${LEVEL}.csv`, 'N03_007,ab\n' + Object.entries(assign).map(([k, v]) => k + ',' + v).join('\n'));
+fs.writeFileSync(`out/entries${LEVEL}.json`, JSON.stringify(entries, null, 1));

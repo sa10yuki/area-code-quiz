@@ -60,18 +60,23 @@
     <!-- start screen -->
     <section class="overlay" id="startScreen">
       <div class="sheet">
-        <p class="eyebrow">頭3桁でおぼえる</p>
+        <div class="level-tabs" id="levelTabs" role="tablist" aria-label="桁数">
+          <button class="level-tab on" type="button" role="tab" data-level="3" aria-selected="true">頭3桁<small>045 / 011 / 03…</small></button>
+          <button class="level-tab" type="button" role="tab" data-level="4" aria-selected="false" tabindex="-1">頭4桁<small>0466 / 0123…</small></button>
+        </div>
+        <p class="eyebrow" id="levelEyebrow">頭3桁でおぼえる</p>
         <h2 class="sheet-title">市外局番クイズ</h2>
-        <p class="lead">表示された市外局番（0AB）が使われているエリアを、地図の中から選んでね。全部で10問！</p>
+        <p class="lead">表示された市外局番（<span id="levelPattern">0AB</span>）が使われているエリアを、地図の中から選んでね。全部で10問！</p>
         <ul class="rules">
-          <li>地図は <strong>60エリア</strong> に区切られてるよ</li>
+          <li>地図は <strong id="areaCount">60エリア</strong> に区切られてるよ</li>
+          <li id="levelNote" hidden>03・045 みたいに2〜3桁で終わる局番も地図にあるけど、選択肢になるだけで出題はされないよ</li>
           <li>ピンチやホイールで拡大できる</li>
           <li>回答後はほかのエリアをタップすると局番が見れる</li>
         </ul>
         <div class="modes" role="radiogroup" aria-label="モード">
           <label class="mode">
             <input type="radio" name="mode" value="normal" checked>
-            <span class="mode-ui"><b>ふつう</b><small>60エリアからランダムに10問</small></span>
+            <span class="mode-ui"><b>ふつう</b><small id="normalDesc">60個の局番からランダムに10問</small></span>
           </label>
           <label class="mode">
             <input type="radio" name="mode" value="weak" id="weakRadio">
@@ -111,7 +116,7 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
-  <script src="data/areas.js"></script>
+  <script src="data/areas3.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
