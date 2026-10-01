@@ -6,6 +6,17 @@
   // No blues: the sea is bluish, so area fills stay in warm / green / purple hues.
   const PALETTE_LIGHT = ['#f6cf7d', '#9fd9b9', '#f3b2c7', '#cdb8f0', '#cde596', '#f4bb97'];
   const PALETTE_DARK = ['#80652e', '#2e6e52', '#81455b', '#5a4a86', '#5a722b', '#7f5236'];
+  // Soft variations of a parent color for the 4-digit level: [mix target, amount].
+  // The first entry (unchanged) is what most areas get.
+  const TINTS = {
+    light: [['#ffffff', 0], ['#ffffff', 0.4], ['#000000', 0.1], ['#ffffff', 0.22]],
+    dark: [['#000000', 0], ['#ffffff', 0.16], ['#000000', 0.28], ['#ffffff', 0.07]],
+  };
+  // mix two #rrggbb colors; amount 0 = a, 1 = b
+  function mix(a, b, amount) {
+    const ch = (hex, i) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+    return '#' + [0, 1, 2].map((i) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * amount).toString(16).padStart(2, '0')).join('');
+  }
   const STORE_KEY = 'areaCodeQuiz.v1';
   const LEVELS = {
     3: { eyebrow: '頭3桁でおぼえる', pattern: '0AB', zoom: 8 },
@@ -86,23 +97,50 @@
       // in the 4-digit level, codes that are only 2–3 digits stay on the map as
       // choices but are not asked (they are the 3-digit level's questions)
       quizCodes: codes.filter((c) => c.length === level),
-      colorIdx: new Map(),
+      fills: { light: new Map(), dark: new Map() }, // code -> fill color per theme
       layers: new Map(), // code -> L.GeoJSON
       labelPoints: new Map(), // code -> LatLng for the code badge
       mainPieces: new Map(), // code -> largest polygon piece (for label visibility)
       group: L.layerGroup(),
     };
 
-    // Greedy map coloring so neighbouring areas get different colors.
     const neighbors = topojson.neighbors(geoms);
-    const idx = [];
-    features.forEach((f, i) => {
-      const used = new Set(neighbors[i].map((j) => idx[j]).filter((c) => c !== undefined));
-      let c = 0;
-      while (used.has(c)) c++;
-      idx[i] = c % PALETTE_LIGHT.length;
-      ds.colorIdx.set(f.properties.ab, idx[i]);
-    });
+    // Greedy coloring: give each item the first choice no neighbour has taken yet.
+    // `same(i, j)` limits which neighbours count.
+    const greedy = (count, same = () => true) => {
+      const idx = [];
+      features.forEach((_, i) => {
+        const used = new Set(neighbors[i].filter((j) => same(i, j)).map((j) => idx[j]).filter((c) => c !== undefined));
+        let c = 0;
+        while (used.has(c)) c++;
+        idx[i] = c % count;
+      });
+      return idx;
+    };
+
+    if (level === 3) {
+      greedy(PALETTE_LIGHT.length).forEach((c, i) => {
+        ds.fills.light.set(codes[i], PALETTE_LIGHT[c]);
+        ds.fills.dark.set(codes[i], PALETTE_DARK[c]);
+      });
+    } else {
+      // Finer levels inherit the color of their 3-digit parent area, and areas
+      // sharing a parent are told apart by soft tints of that color.
+      const parentDs = await getDataset(3);
+      const parentOf = (code) => [code.slice(0, 3), code.slice(0, 2)].find((p) => parentDs.fills.light.has(p));
+      const parents = codes.map(parentOf);
+      greedy(TINTS.light.length, (i, j) => parents[i] === parents[j]).forEach((t, i) => {
+        for (const theme of ['light', 'dark']) {
+          const [target, amount] = TINTS[theme][t];
+          ds.fills[theme].set(codes[i], mix(parentDs.fills[theme].get(parents[i]), target, amount));
+        }
+      });
+      // bold outlines along the 3-digit borders so the parent areas stay readable
+      const ptopo = window.AREA_DATA[3].topo;
+      ds.parentLines = L.geoJSON(topojson.mesh(ptopo, ptopo.objects.areas, (a, b) => a !== b), {
+        interactive: false, style: parentLineStyle,
+      });
+    }
 
     features.forEach((f) => {
       const code = f.properties.ab;
@@ -113,6 +151,9 @@
       ds.layers.set(code, layer);
       ds.group.addLayer(layer);
     });
+    // added after the areas so it draws above them; selected / answered areas
+    // are brought to the front and still cover it
+    if (ds.parentLines) ds.group.addLayer(ds.parentLines);
 
     ds.prefLines = L.geoJSON(topojson.feature(topo, topo.objects.preflines), {
       pane: 'lines', interactive: false, style: prefLineStyle,
@@ -144,20 +185,28 @@
     restyleAll();
   }
 
+  const borderColor = () => (dark.matches ? '#16181c' : '#ffffff');
+
   function baseStyle(code, ds = DS) {
     return {
-      color: dark.matches ? '#16181c' : '#ffffff',
-      weight: 1.2,
-      fillColor: (dark.matches ? PALETTE_DARK : PALETTE_LIGHT)[ds.colorIdx.get(code)],
+      color: borderColor(),
+      // 4-digit areas get hairline borders; the 3-digit borders are drawn bold on top
+      weight: ds.level === 3 ? 1.2 : 0.6,
+      fillColor: ds.fills[dark.matches ? 'dark' : 'light'].get(code),
       fillOpacity: 1,
       opacity: 1,
     };
+  }
+
+  function parentLineStyle() {
+    return { color: borderColor(), weight: 2.4, opacity: 1 };
   }
 
   dark.addEventListener('change', () => {
     if (!DS) return;
     restyleAll();
     DS.prefLines.setStyle(prefLineStyle());
+    if (DS.parentLines) DS.parentLines.setStyle(parentLineStyle());
   });
 
   // ---------- area descriptions ----------
